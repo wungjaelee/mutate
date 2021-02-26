@@ -9,6 +9,7 @@
 
           [select-define-body                  top-level-selector/c]
           [select-type-annotations+define-body top-level-selector/c]
+          [select-except-test-module                      top-level-selector/c]
 
           [leftmost-identifier-in  (syntax? . -> . symbol?)]))
 
@@ -76,6 +77,17 @@
                            Mutated: @a-bigger-list
                            })]))]))
 
+(define (select-except-test-module stx)
+  (syntax-parse stx
+    [({~literal module*} {~literal test} _ ...)
+     (values #f #f #f)]
+    [else
+     (select-all stx)]))
+
+(define (select-none stx)
+  (syntax-parse stx
+    [_ (values #f #f #f)]))
+
 (define (select-define/contract stx)
   (syntax-parse stx
     [def:contracted-definition
@@ -131,6 +143,7 @@
              (leftmost-identifier-in #'id/sig)
              reconstruct-definition)]
     [_ (values #f #f #f)]))
+
 
 (module+ test
   (require ruinit
