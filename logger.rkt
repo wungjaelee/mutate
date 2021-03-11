@@ -16,5 +16,7 @@
 (define (log-mutation before after)
   (log-message mutate-logger
                'info
-               @~a{Mutating @before -> @after}
+               @~a{Mutating @before
+                            ->
+                            @after}
                (list before after)))
