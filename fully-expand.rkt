@@ -3,9 +3,11 @@
 (provide
  (contract-out [extract-fully-expanded-program (-> path-string? any/c)]
                [extract-syntax                 (->* (path-string?) (namespace?) any/c)]
-               [expand-and-disarm              (->* (syntax?) (namespace? path-string?) any/c)]))
+               #;[expand-and-disarm              (->* (syntax?) (namespace? path-string?) any/c)])
+ expand-and-disarm)
 
-(require syntax/modread)
+(require syntax/modread
+         debug-scopes)
 
 (define (extract-fully-expanded-program pth)
   (define new-namespace (make-base-namespace))
@@ -25,17 +27,18 @@
         (with-module-reading-parameterization
           (λ () (read-syntax pth port)))))))
 
-(define (expand-and-disarm program-stx [namespace (make-base-namespace)] [directory (current-directory)])
+(define (expand-and-disarm program-stx [namespace (make-base-namespace)] #:directory [directory (current-directory)])
   (parameterize ([current-namespace namespace]
                  [current-directory directory])
     (let loop ([stx (expand program-stx)])
       (cond
+        [(syntax? stx)
+         (define datum-syntax-stx (datum->syntax (syntax-disarm stx #f)
+                                                 (loop (syntax-e (syntax-disarm stx #f)))
+                                                 stx
+                                                 stx))
+         datum-syntax-stx]
         [(pair? stx)
          (cons (loop (car stx))
                (loop (cdr stx)))]
-        [(syntax? stx)
-         (datum->syntax (syntax-disarm stx #f)
-                        (loop (syntax-e (syntax-disarm stx #f)))
-                        (syntax-disarm stx #f)
-                        (syntax-disarm stx #f))]
         [else stx]))))

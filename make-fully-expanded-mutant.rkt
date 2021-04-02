@@ -14,19 +14,6 @@
          racket/require-transform
          racket/runtime-path)
 
-#;(require syntax/parse
-           (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/fully-expand.rkt")
-           (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/fully-expanded-syntax-mutators.rkt")
-           (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/mutated.rkt")
-           (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/mutator-lib.rkt")
-           (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/mutate-expr.rkt")
-           (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/mutate-program.rkt")
-           (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/mutate-util.rkt")
-           (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/top-level-selectors.rkt")
-           (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/rackunit-test-mutators.rkt")
-           (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/my-logger.rkt")
-           rackunit)
-
 (define swap*
   (apply compose-mutators
          (list plain-lambda-swap*
@@ -37,69 +24,80 @@
                                              select-except-test-module))
 (define mutate-program-syntax (syntax-only mutate-program))
 
-;; for wrapping rackunit test functions with input logging
-(define mutate-rackunit-expr (make-expr-mutator wrap-check-equal))
-(define mutate-rackunit-program (make-program-mutator mutate-rackunit-expr))
-(define mutate-rackunit-program-syntax (syntax-only mutate-rackunit-program))
+(define (wrap-rackunit-tests program-stx)
+  (syntax-parse program-stx
+    [({~datum module+} {~datum test} something body ...)
+     (datum->syntax program-stx
+                    `(module+ test ,#'something
+                       (define test-id 0)
+                       (require (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/my-logger.rkt"))
+                       ;(require (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/test-mutators.rkt"))
+                       (parameterize ([current-check-around
+                                       (λ (chk-thunk)
+                                         (with-handlers ([exn:test:check? (λ (e) (log-test-info "test ~a failed" test-id))])
+                                           (chk-thunk)
+                                           (log-test-info "test ~a passed" test-id)))])
+                         ,@(map wrap-rackunit-tests (syntax->list #'(body ...))) ))
+                    program-stx
+                    program-stx)]
+    [({~datum check-equal?} e1 e2)
+     (define val1 (syntax->datum #'e1))
+     (define val2 (syntax->datum #'e2))
+     (datum->syntax
+      program-stx
+      `(with-handlers ([exn? (λ (e) (log-test-info "Test ~a raised an error with exception ~a" test-id e))])
+         (begin
+           (set! test-id (add1 test-id))
+           (log-test-info "Running test ~a (check-equal? ~a ~a) evaluated to (check-equal? ~a ~a)" test-id ',val1 ',val2 ,#'e1 ,#'e2)
+           (check-equal? ,#'e1 ,#'e2)))
+      program-stx
+      program-stx)]
+    [({~datum check-true} e1)
+     (define val1 (syntax->datum #'e1))
+     (datum->syntax
+      program-stx
+      `(with-handlers ([exn? (λ (e) (log-test-info "Test ~a raised an error with exception ~a" test-id e))])
+         (begin
+           (set! test-id (add1 test-id))
+           (log-test-info "Running test ~a (check-true ~a) evaluated to (check-true ~a)" test-id ',val1 ,#'e1)
+           (check-true ,#'e1)))
+      program-stx
+      program-stx)]
+    [({~datum check-false} e1)
+     (define val1 (syntax->datum #'e1))
+     (datum->syntax
+      program-stx
+      `(with-handlers ([exn? (λ (e) (log-test-info "Test ~a raised an error with exception ~a" test-id e))])
+         (begin
+           (set! test-id (add1 test-id))
+           (log-test-info "Running test ~a (check-true ~a) evaluated to (check-true ~a)" test-id ',val1 ,#'e1)
+           (check-false ,#'e1)))
+      program-stx
+      program-stx)]
+    [(e ...)
+     (datum->syntax
+      program-stx
+      (map wrap-rackunit-tests (syntax->list #'(e ...)))
+      program-stx
+      program-stx)]
+    [e
+     (datum->syntax program-stx `,#'e program-stx program-stx)]))
 
-(define (mutate-all module-stx program-mutator)
-  (define mutant module-stx)
-  (with-handlers ([mutation-index-exception? (λ _ (displayln 'done!))])
-    (for ([i (in-naturals)])
-      (set! mutant (program-mutator mutant i))))
-  mutant)
-
-
-;(define test-mutate-namespace (make-base-namespace))
-#;(define tp (extract-syntax "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/test2.rkt" test-mutate-namespace))
-;(define mtp (mutate-test-module-syntax tp 0))
-;(displayln "hi")
-;(define mtp (mutate-all tp))
-;(displayln "hi2")
-;(define fmtp (expand-and-disarm mtp test-mutate-namespace))
-
-(define (my-mutate program-stx [namespace (current-namespace)])
-  (parameterize ([current-namespace namespace])
-    (syntax-parse program-stx
-      #;[({~datum module} name racket body ...)
-         #'(module name racket
-             body ...)]
-      [({~datum module+} test something body ...)
-       (datum->syntax program-stx
-                      `(module+ test ,#'something (require (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/my-logger.rkt")) ,@(map my-mutate (syntax->list #'(body ...)))))]
-      ;(module test racket
-      ;#,(map my-mutate (syntax->list #'(body ...))))]
-      [({~datum check-equal?} e1 e2)
-       (datum->syntax
-        program-stx
-        `(begin (log-test-info "Running test (check-equal? ~a ~a)\n" ,#'e1 ,#'e2)
-                (check-equal? ,#'e1 ,#'e2))
-        program-stx
-        program-stx)]
-      [(e ...)
-       #`(#,@(map my-mutate (syntax->list #'(e ...))))]
-      [e (datum->syntax program-stx `,#'e program-stx program-stx)])))
-
-(define hi (extract-syntax "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/test2.rkt"))
-
-#;(my-mutate (list-ref (syntax->list (list-ref (syntax->list (list-ref (syntax->list hi) 3)) 5)) 3))
 
 (define (mutate-rackunit-tests path)
   (define-values (dir file is-dir) (split-path path))
   (define ns (make-base-namespace))
   (namespace-attach-module (current-namespace) "my-logger.rkt" ns)
   (define stx (extract-syntax path ns))
-  ;(define rackunit-mutated-stx (mutate-all stx mutate-rackunit-program-syntax))
-  (define rackunit-mutated-stx (my-mutate stx ns))
-  ;(define rackunit-mutated-stx (mutate-rackunit-program-syntax stx 0))
+  (define rackunit-mutated-stx (wrap-rackunit-tests stx))
   (displayln rackunit-mutated-stx)
-  (define fully-expanded-stx (expand-and-disarm rackunit-mutated-stx ns))
+  (define fully-expanded-stx (expand-and-disarm rackunit-mutated-stx ns #:directory dir))
   fully-expanded-stx)
 
-(define (make-mutant my-module-stx i)
+(define (make-mutant my-module-stx program-mutator i)
   (syntax-parse my-module-stx
     [(module name lang (#%module-begin top-level-form ...))
-     #:with [mutated-top-level-form ...] (mutate-program-syntax #'[top-level-form ...] i)
+     #:with [mutated-top-level-form ...] (program-mutator #'[top-level-form ...] i)
      #'(begin (module name lang (#%module-begin mutated-top-level-form ...))
               (require (submod 'name test)))]))
 
@@ -109,40 +107,40 @@
      #'(begin (module name lang body ...)
               (require (submod 'name test)))]))
 
-#;(define target-program
-    (extract-fully-expanded-program "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/board.rkt"))
 
-(define target-program
-  (mutate-rackunit-tests "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/test2.rkt"))
+;(define target-program (mutate-rackunit-tests "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/board.rkt"))
 
+(define (run-experiment program-file-path mutator)
+  ; set up program by wrapping all rackunit tests
+  (define target-program (mutate-rackunit-tests program-file-path))
 
-; (eval-syntax (add-begin-require target-program))
+  ; make program mutator
+  (define expr-mutator (make-expr-mutator mutator))
+  (define program-mutator (make-program-mutator expr-mutator
+                                                select-except-test-module))
+  (define stx-only-program-mutator (syntax-only program-mutator))
 
-#;(define-runtime-module-path-index board.rkt-mpi "experiments/santorini/board.rkt")
-
-;current-require-module-path
-;current-directory
-
-(with-handlers ([mutation-index-exception? (λ _ (displayln 'done!))])
+  ; generate all mutants and run the tests
+  (define-values (dir file is-dir) (split-path program-file-path))
+  (with-handlers ([mutation-index-exception? (λ _ (displayln 'done!))])
     (for ([i (in-naturals)])
-      (define mutant (make-mutant target-program i))
+      (define mutant (make-mutant target-program stx-only-program-mutator i))
       (log-test-info "mutant ~a" i)
       ;(log-test-info (pretty-format (syntax->datum mutant)))
       (define this-ns (current-namespace))
       (define test-id 0)
-      ;(define my-check-around (make-parameter default-check-around))
       (parameterize ([current-namespace (make-base-namespace)]
-                     #;[current-require-module-path board.rkt-mpi])
+                     [current-directory dir])
         (namespace-attach-module this-ns 'rackunit)
-        (parameterize ([current-check-around
-                        (λ (chk-thunk)
-                          (with-handlers ([exn:test:check? (λ (e) (log-test-info "test ~a failed" test-id))]
-                                          [exn:fail? (λ (e) (log-test-info "test ~a raised an error ~a" test-id e))])
-                            (set! test-id (add1 test-id))
-                            (chk-thunk)
-                            (log-test-info "test ~a passed" test-id)))])
-          (with-handlers ([exn:fail? (λ (e) (log-test-info "test ~a raised an error ~a" test-id e))])
-            (eval-syntax mutant))))))
+        (namespace-attach-module this-ns 'racket)
+        (eval-syntax mutant))))
+  )
+
+;(run-experiment "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/board.rkt" if-swap*)
+
+(run-experiment "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/.rkt" if-swap*)
+
+
 
 
 #|
