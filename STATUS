@@ -1,0 +1,74 @@
+2021/4/16 Friday Meeting
+Problem & Solution
+-------------------------------------------------------------------
+Problem 1.
+There exists user-defined test functions such as check-permutation.
+The arguments to the check-permutation may raise an error due to mutation, causing the whole program to stop. 
+Solutions 1.
+1. (attach exn handler) <=> inlining the function
+Write a macro-generating macro for define so that (define (fn-id args ...) body ...) will make fn-id a macro 
+that transforms (fn-id input ...) => (with-handlers (...) ((lambda (args ...) body ...) input ...))
+
+After discussing, we decided to go with a more general approach:
+within the test module (i.e. (module+ test ...)), wrap every top level expressions with with-handlers
+with the exception of define, define-values, require, etc.
+-------------------------------------------------------------------
+
+2021/4/23 Friday Pre-meeting
+Questions
+1. If we attach exn handler to every top level expressions within the test suite,
+how will we count test results? I'm trying to transform
+(test-fn ...) => (test-handler (test-fn ...))
+where test-handler reports the result of running (test-fn ...) in three forms: test passed, test failed, test raised an exception
+
+Problem is 
+There may be a top level expression that has nothing to do with running the test.
+For example,
+(displayln 'something) => (test-handler (displayln 'something))
+but there is no way to distinguish displayln from some other actual test-fn
+so we may just recognize it as test
+
+actually this can be avoided!
+If we parameterize current-check-around to signal test passed and test failed,
+then it would be only triggered for rackunit tests and not others
+
+Situation: 
+
+Potential breaches
+1. (require rackunit) appearing later, e.g. (module+ test (blahblah) ... (require rackunit) ...)
+2. Assumption is require comes at the beginning i.e. (module+ test (require ...) body ...). If this is not true, unexpected stuff can happen
+=> potentially need to rearrange so that all the requires comes to the front
+
+Limitations:
+1. Usually test and program are separated (e.g. gregor). Right now, my program works only if program and tests are within the same file.
+2. If dependent package is not installed, then I have to manually install them. 
+e.g.
+standard-module-name-resolver: collection not found
+  for module path: tzinfo
+  collection: "tzinfo"
+3. I'm wrapping only top level expressions, which is problematic when there are
+(test-suite ...
+  (test-case ...
+    (check-equal? ...)
+    (check-true? ...)
+    ...))
+
+
+SUMMARY OF PROBLEMS
+1. program functions and their tests are separated in different files. My mutant generator requires them in a single file => involves manual work of putting them together
+2. rackunit check functions may not be the top level expressions of (module+ test ...). They may be inside run-tests, test-suite, test-case, etc.
+=> I can try flattening it, but there may be a case where (parameterize ... (check-1 ...) (check-2 ...))
+=> may have to come back to l
+3. somehow parameterizing current-check-around has no effect when check-blah are within run-tests, test-suite, test-case, etc. It might be that run-tests parameterize current-check-around so it gets overwritten.
+=> Indeed it is, according to doc 
+"""
+(test-suite-check-around thunk) → any/c
+  thunk : (-> any/c)
+The current-check-around parameter is parameterized to this value within the scope of a test-suite. This function creates a test case structure instead of immediately evaluating a check.
+"""
+4. stdout printouts and test-info, mutate-info are all intermingled. Need a way to separate normal printout messages from test-info and mutate-info
+
+
+SOLUTION/TODOS
+1. write my own rackunit essentially, that has all the functions with same interface as rackunit, but do whatever I want
+2. write my own defines

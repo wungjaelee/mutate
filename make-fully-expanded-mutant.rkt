@@ -19,6 +19,47 @@
          (list plain-lambda-swap*
                if-swap*)))
 
+(define (simple-flatten-test-cases test-module-stx)
+  (syntax-parse test-module-stx
+    [({~datum run-tests} test)
+     (simple-flatten-test-cases #'test)]
+    [({~datum test-suite} name test ...)
+     (simple-flatten-test-cases #'(test ...))]
+    [({~datum test-case} name check ...)
+     #'(check ...)]
+    [(expr ...)
+     #`(#,@(map simple-flatten-test-cases (syntax->list #'(expr ...))))]
+    [e #'e]))
+
+(define (flatten-test-cases test-module-stx)
+  (syntax-parse test-module-stx
+    [({~datum run-tests} test)
+     (datum->syntax test-module-stx
+                    (flatten-test-cases #'test)
+                    test-module-stx
+                    test-module-stx)]
+    [({~datum test-suite} name-expr test ...)
+     (datum->syntax test-module-stx
+                    (flatten-test-cases #'(test ...))
+                    test-module-stx
+                    test-module-stx)]
+    [({~datum test-case} name check ...)
+     (datum->syntax test-module-stx
+                    `,#'(check ...)
+                    test-module-stx
+                    test-module-stx)]
+    [(expr ...)
+     (datum->syntax test-module-stx
+                    (map flatten-test-cases (syntax->list #'(expr ...)))
+                    test-module-stx
+                    test-module-stx)]
+    [e
+     (datum->syntax test-module-stx
+                    `,#'e
+                    test-module-stx
+                    test-module-stx)]))
+
+
 (define (attach-exn-handler-to-top-level-exprs test-module-stx)
   (syntax-parse test-module-stx
     [({~datum require} program)
@@ -56,7 +97,9 @@
      (datum->syntax test-module-stx
                     `(with-handlers
                          ([exn?
-                           (λ (exn) (log-test-info "EXCEPTION: Test ~a raised an exception ~a" ',#'expr exn))])
+                           #;(λ (exn) (log-test-info "EXCEPTION: Test ~a ~a raised an exception ~a" test-id ',#'expr exn))
+                           (λ (exn) (log-test-info "EXCEPTION: Test ~a raised an exception ~a" test-id exn))])
+                       (set! test-id (add1 test-id))
                        ,#'expr)
                     test-module-stx
                     test-module-stx)]))
@@ -71,17 +114,163 @@
                        (require (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/my-logger.rkt"))
                        (parameterize ([current-check-around
                                        (λ (chk-thunk) (with-handlers ([exn:test:check? (λ (e) (log-test-info "FAIL: Test ~a failed" test-id))]) (chk-thunk) (log-test-info "PASS: Test ~a passed" test-id)))])
-                         ,@(map attach-exn-handler-to-top-level-exprs (syntax->list #'(body ...)))))
-                       program-stx
-                       program-stx)]
-[(e ...)
- (datum->syntax
-  program-stx
-  (map transform-test-suite (syntax->list #'(e ...)))
-  program-stx
-  program-stx)]
-[e
- (datum->syntax program-stx `,#'e program-stx program-stx)]))
+                         ,@(map attach-exn-handler-to-top-level-exprs (syntax->list (flatten-test-cases #'(body ...))))))
+                    program-stx
+                    program-stx)]
+    [(e ...)
+     (datum->syntax
+      program-stx
+      (map transform-test-suite (syntax->list #'(e ...)))
+      program-stx
+      program-stx)]
+    [e
+     (datum->syntax program-stx `,#'e program-stx program-stx)]))
+
+
+
+(define (mutate-rackunit-tests path)
+  (define-values (dir file is-dir) (split-path path))
+  (define ns (make-base-namespace))
+  (namespace-attach-module (current-namespace) "my-logger.rkt" ns)
+  (define stx (extract-syntax path ns))
+  ;(display stx)
+  (define test-suite-transformed-stx (transform-test-suite stx))
+  (display test-suite-transformed-stx)
+  (log-test-info (pretty-format (syntax->datum test-suite-transformed-stx)))
+  (define fully-expanded-stx (expand-and-disarm test-suite-transformed-stx ns #:directory dir))
+  fully-expanded-stx)
+
+(define (make-mutant my-module-stx program-mutator i)
+  (syntax-parse my-module-stx
+    [(module name lang (#%module-begin top-level-form ...))
+     #:with [mutated-top-level-form ...] (program-mutator #'[top-level-form ...] i)
+     #'(begin (module name lang (#%module-begin mutated-top-level-form ...))
+              (require (submod 'name test)))]))
+
+(define (add-begin-require my-module-stx)
+  (syntax-parse my-module-stx
+    [(module name lang body ...)
+     #'(begin (module name lang body ...)
+              (require (submod 'name test)))]))
+
+(define (run-experiment program-file-path mutator)
+  ; set up program by wrapping all rackunit tests
+  (define target-program (mutate-rackunit-tests program-file-path))
+
+  ; make program mutator
+  (define expr-mutator (make-expr-mutator mutator))
+  (define program-mutator (make-program-mutator expr-mutator
+                                                select-except-test-module))
+  (define stx-only-program-mutator (syntax-only program-mutator))
+
+  ; generate all mutants and run the tests
+  (define-values (dir file is-dir) (split-path program-file-path))
+  (with-handlers ([mutation-index-exception? (λ _ (displayln 'done!))])
+    (for ([i (in-naturals)])
+      (define mutant (make-mutant target-program stx-only-program-mutator i))
+      (log-test-info "mutant ~a" i)
+      ;(log-test-info (pretty-format (syntax->datum mutant)))
+      (define this-ns (current-namespace))
+      (define test-id 0)
+      (parameterize ([current-namespace (make-base-namespace)]
+                     [current-directory dir])
+        (namespace-attach-module this-ns 'rackunit)
+        (namespace-attach-module this-ns 'racket)
+        #;(eval-syntax mutant)
+        (with-handlers ([exn? (λ (e) (log-test-info "top level exception ~a\n" e))])
+          (eval-syntax mutant))))
+    ))
+
+; 1. syntax error at (define mutant ...) => wrap it with with-handlers 
+; 2. dynamic error if error at (eval-syntax mutant)
+; 3. just wrap every top level expressions with with-handlers, with the exception of define
+; 4. go to package server, select few packages with different authors (e.g. gregor date time library)
+
+;(run-experiment "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/board.rkt" if-swap*)
+
+#;(run-experiment "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/mytest.rkt" if-swap*)
+
+#;(run-experiment "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/player.rkt" swap*)
+
+#;(when (= (vector-length (current-command-line-arguments)) 1)
+  (run-experiment (vector-ref (current-command-line-arguments) 0)
+                  if-swap*))
+
+
+(define test-module-stx
+  #'(module+ test
+      (require rackunit 
+               rackunit/text-ui
+               "iso8601-parse.rkt")
+
+      (run-tests
+       (test-suite "[clock]"
+                   (parameterize ([current-clock (λ () 1)])
+
+                     (test-case "today"
+                                (check-equal? (today/utc) (date 1970))
+                                (check-equal? (today #:tz "America/Chicago") (date 1969 12 31))
+                                (check-equal? (today #:tz -21600) (date 1969 12 31)))
+
+                     (test-case "current-time"
+                                (check-equal? (current-time/utc) (time 0 0 1))
+                                (check-equal? (current-time #:tz "America/Chicago") (time 18 0 1))
+                                (check-equal? (current-time #:tz -21600) (time 18 0 1)))
+
+                     (test-case "now"
+                                (check-equal? (now/utc) (datetime 1970 1 1 0 0 1))
+                                (check-equal? (now #:tz "America/Chicago") (datetime 1969 12 31 18 0 1))
+                                (check-equal? (now #:tz -21600) (datetime 1969 12 31 18 0 1)))
+
+                     (test-case "moment"
+                                (check-equal? (now/moment/utc) (moment 1970 1 1 0 0 1 #:tz UTC))
+                                (check-equal? (now/moment #:tz "America/Chicago")
+                                              (moment 1969 12 31 18 0 1 #:tz "America/Chicago"))
+                                (check-equal? (now/moment #:tz -21600)
+                                              (moment 1969 12 31 18 0 1 #:tz -21600))))))))
+  
+(simple-flatten-test-cases test-module-stx)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #;(define (wrap-rackunit-tests program-stx)
     (syntax-parse program-stx
@@ -136,103 +325,3 @@
         program-stx)]
       [e
        (datum->syntax program-stx `,#'e program-stx program-stx)]))
-
-
-(define (mutate-rackunit-tests path)
-  (define-values (dir file is-dir) (split-path path))
-  (define ns (make-base-namespace))
-  (namespace-attach-module (current-namespace) "my-logger.rkt" ns)
-  (define stx (extract-syntax path ns))
-  ;(display stx)
-  (define test-suite-transformed-stx (transform-test-suite stx))
-  ;(display test-suite-transformed-stx)
-  (log-test-info (pretty-format (syntax->datum test-suite-transformed-stx)))
-  (define fully-expanded-stx (expand-and-disarm test-suite-transformed-stx ns #:directory dir))
-  fully-expanded-stx)
-
-(define (make-mutant my-module-stx program-mutator i)
-  (syntax-parse my-module-stx
-    [(module name lang (#%module-begin top-level-form ...))
-     #:with [mutated-top-level-form ...] (program-mutator #'[top-level-form ...] i)
-     #'(begin (module name lang (#%module-begin mutated-top-level-form ...))
-              (require (submod 'name test)))]))
-
-(define (add-begin-require my-module-stx)
-  (syntax-parse my-module-stx
-    [(module name lang body ...)
-     #'(begin (module name lang body ...)
-              (require (submod 'name test)))]))
-
-(define (run-experiment program-file-path mutator)
-  ; set up program by wrapping all rackunit tests
-  (define target-program (mutate-rackunit-tests program-file-path))
-
-  ; make program mutator
-  (define expr-mutator (make-expr-mutator mutator))
-  (define program-mutator (make-program-mutator expr-mutator
-                                                select-except-test-module))
-  (define stx-only-program-mutator (syntax-only program-mutator))
-
-  ; generate all mutants and run the tests
-  (define-values (dir file is-dir) (split-path program-file-path))
-  (with-handlers ([mutation-index-exception? (λ _ (displayln 'done!))])
-    (for ([i (in-naturals)])
-      (define mutant (make-mutant target-program stx-only-program-mutator i))
-      (log-test-info "mutant ~a" i)
-      ;(log-test-info (pretty-format (syntax->datum mutant)))
-      (define this-ns (current-namespace))
-      (define test-id 0)
-      (parameterize ([current-namespace (make-base-namespace)]
-                     [current-directory dir])
-        (namespace-attach-module this-ns 'rackunit)
-        (namespace-attach-module this-ns 'racket)
-        (eval-syntax mutant)
-        #;(with-handlers ([exn? (λ (e) (log-test-info "top handler ~a\n" e))])
-            (eval-syntax mutant))))
-    ))
-
-; 1. syntax error at (define mutant ...) => wrap it with with-handlers 
-; 2. dynamic error if error at (eval-syntax mutant)
-; 3. just wrap every top level expressions with with-handlers, with the exception of define
-; 4. go to package server, select few packages with different authors (e.g. gregor date time library)
-
-;(run-experiment "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/board.rkt" if-swap*)
-
-;(run-experiment "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/mytest.rkt" if-swap*)
-
-(run-experiment "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/player.rkt" if-swap*)
-
-#;(when (= (vector-length (current-command-line-arguments)) 1)
-    (run-experiment (vector-ref (current-command-line-arguments) 0)
-                    swap*))
-
-
-
-
-#|
-1. Goal: test logging
-    => write macro that prints test and then run test
-    => work on the level of program syntax, not fully expanded one
-    => how to avoid repeating?
-2. Goal: exception raised for tests due to wrong transformation
-|#
-
-
-
-
-#|
-Edge cases
-
-1. user-defined test functions e.g. check-permutation
-the parameter passed in to the function throws an error as it gets evaluated first
-
-; Solution:
-; 1. recognize that it's a user-defined test function and inline it
-; 2. or write custom define that wraps the function's body with with-handler to catch any exception
-; 1. how do we know that it's a user-defined test function?
-; 2. if it boils down to rackunit tests
-; 3. cannot catch at rackunit test level because it's a function call and the arguments get evaluated first when it is passed in which then possibly throws an error. => function inlining can avoid this problem. Or crude but work is to wrap define with with-handler
-
-2. error in the body. Doesn't even get to test module
-
-|#
