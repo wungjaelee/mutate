@@ -166,7 +166,7 @@
     (for/list ([{orig new} (in-dict swap-alist)])
       (make-guarded-mutator (λ (v) (equal? v orig))
                             (λ (v)
-                              (log-mutation-type mutation-type)
+                              #;(log-mutation-type mutation-type)
                               new))))
   (apply-mutators original-value
                   mutator-sequence
@@ -183,7 +183,7 @@
                                       [pat #t]
                                       [else #f]))
                              (match-lambda [(and value-name pat)
-                                            (log-mutation-type the-type)
+                                            #;(log-mutation-type the-type)
                                             replacement]))
        ...))
     (if (syntax->list maybe-atom-stx)
@@ -234,7 +234,7 @@
   ;; This doesn't work because some change in between there might
   ;; produce a syntactically equivalent mutant!
   (define-mutator (the-mutator stx mutation-index counter) #:type [the-type type]
-    (log-mutation-type the-type)
+    #;(log-mutation-type the-type)
     (let loop ([mutated-so-far (no-mutation stx mutation-index counter)]
                [i 0])
       (cond [(> (mutated-new-counter mutated-so-far) mutation-index)

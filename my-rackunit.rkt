@@ -11,30 +11,30 @@
 ; basic checks
 
 #;(define-syntax-parser check-equal?
-  [(check-equal? v1 v2 {~optional message})
-   #'(parameterize ([@current-check-around
-                   (λ (chk-thunk)
-                     (with-handlers ([@exn:test:check? (λ (e) (log-test-info "FAIL: test failed"))])
-                       (chk-thunk)
-                       (log-test-info "PASS: test passed")))])
-     (with-handlers ([exn? (λ (e) (log-test-info "EXCEPTION: test raised an error ~a" e))])
-       (@check-equal? v1 v2)))])
+    [(check-equal? v1 v2 {~optional message})
+     #'(parameterize ([@current-check-around
+                       (λ (chk-thunk)
+                         (with-handlers ([@exn:test:check? (λ (e) (log-test-info "FAIL: test failed"))])
+                           (chk-thunk)
+                           (log-test-info "PASS: test passed")))])
+         (with-handlers ([exn? (λ (e) (log-test-info "EXCEPTION: test raised an error ~a" e))])
+           (@check-equal? v1 v2)))])
 
 (define-syntax-parser make-basic-check
   [(make-basic-check check-name)
    (with-syntax ([original-rackunit-check
                   (format-id #'check-name "@~a" #'check-name)])
-   #'(define-syntax-parser check-name
-       [(check-name args (... ...))
-        #'(parameterize ([@current-check-around
-                   (λ (chk-thunk)
-                     (with-handlers ([@exn:test:check? (λ (e) (log-test-info "FAIL: test failed"))]
-                                     [exn? (λ (e) (log-test-info "ERROR-FAIL: test failed with error ~a" e))])
-                       (chk-thunk)
-                       (log-test-info "PASS: test passed")))])
-     (with-handlers ([exn? (λ (e) (log-test-info "ERROR: test raised an error ~a" e))])
-       (log-test-info "Running test (~a ~v)" 'check-name (map (λ (stx) (syntax->datum stx)) (syntax->list #'(args (... ...)))))
-       (original-rackunit-check args (... ...))))]))])
+     #'(define-syntax-parser check-name
+         [(check-name args (... ...))
+          #'(parameterize ([@current-check-around
+                            (λ (chk-thunk)
+                              (with-handlers ([@exn:test:check? (λ (e) (log-test-info "FAIL: test failed"))]
+                                              [exn? (λ (e) (log-test-info "ERROR-FAIL: test failed with error ~a" e))])
+                                (chk-thunk)
+                                (log-test-info "PASS: test passed")))])
+              (with-handlers ([exn? (λ (e) (log-test-info "ERROR: test raised an error ~a" e))])
+                (log-test-info "Running test ~a" (cons 'check-name (map (λ (stx) (syntax->datum stx)) (syntax->list #'(args (... ...))))))
+                (original-rackunit-check args (... ...))))]))])
 
 (make-basic-check check-eq?)
 (make-basic-check check-not-eq?)
@@ -58,8 +58,14 @@
 
 #;(define-syntax-parser define-simple-check
   [(define-simple-check (name param ...) body ...)
-   #'(@define-simple-check (name param ...) body ...)
-   #'(make-basic-check name)])
+   (with-syntax 
+   #'(begin
+       (@define-simple-check (@name param ...) body ...)
+       (make-basic-check name)))])
+
+#;(define-simple-check (check-odd blah)) ;; this is inside
+#;(make-basic-check check-odd)
+
 
 #;(define-syntax-parser run-tests)
   
@@ -96,4 +102,5 @@ Questions
 
 1. remove paren from variable number of arguments
 2. define-simple-check
+3. error containing define identifier, make it to dummy-val so that test fail? or define it to error so that it will raise an error?
 |#

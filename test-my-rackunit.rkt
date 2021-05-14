@@ -7,9 +7,25 @@
 (define (get-length val)
   (if (list? val) (length val) #f))
 
-(module+ test
-  (require (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/my-rackunit.rkt"))
+(define (get-length-error val)
+  (if (list? val) #f (length val)))
 
+(module+ test
+  (require rackunit)
+  #;(require (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/my-rackunit.rkt")
+           (file "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/my-defines.rkt"))
+  (displayln "hello")
+ 
+  (define val-not-ok (get-length-error 3))
+  (define (check-even val)
+    (if (equal? (remainder val 2) 0) #t #f))
+  (define (add-1-to-length val)
+    (+ 1 (get-length val)))
+  (define-values (v1 v2) (values (error "hi") 2))
+  (check-equal? val-not-ok 3)
+  (check-true (check-even 2))
+  (check-equal? (add-1-to-length 3) 3)
+  
   (check-eq? (list 1) (list 1) "hello")
   (check-eq? 3 3)
   (check-eq? (length 3) 4 "hi")
