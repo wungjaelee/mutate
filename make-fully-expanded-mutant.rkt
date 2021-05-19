@@ -19,50 +19,6 @@
          (list plain-lambda-swap*
                if-swap*)))
 
-(define (attach-exn-handler-to-top-level-exprs test-module-stx)
-  (syntax-parse test-module-stx
-    [({~datum require} program)
-     (datum->syntax test-module-stx
-                    `(require ,#'program)
-                    test-module-stx
-                    test-module-stx)]
-    [({~datum define} (fn-id args ...) body0 body ...)
-     (datum->syntax test-module-stx
-                    `(define (,#'fn-id ,@#'(args ...)) ,#'body0 ,@#'(body ...))
-                    test-module-stx
-                    test-module-stx)]
-    [({~datum define} id body)
-     (datum->syntax test-module-stx
-                    `(define ,#'id
-                       (with-handlers
-                           ([exn?
-                             (λ (e)
-                               (log-test-info "DEFINE-ID-ERROR: while defining IDENTIFIER ~a ERROR ~a was raised " ',#'id e)
-                               'dummy-val)])
-                         ,#'body))
-                    test-module-stx
-                    test-module-stx)]
-    [({~datum define-values} (id ...) body)
-     (datum->syntax test-module-stx
-                    `(define-values ,#'(id ...)
-                       (with-handlers
-                           ([exn?
-                             (λ (e) (log-test-info "DEFINE-VALUES-ID-ERROR: while defining IDENTIFIER ~a ERROR ~a was raised " ',#'(id ...) e)
-                               (values ,@(map (λ (id) ''dummy-val) (syntax->list #'(id ...)))))])
-                         ,#'body))
-                    test-module-stx
-                    test-module-stx)]
-    [expr
-     (datum->syntax test-module-stx
-                    `(with-handlers
-                         ([exn?
-                           #;(λ (exn) (log-test-info "EXCEPTION: Test ~a ~a raised an exception ~a" test-id ',#'expr exn))
-                           (λ (exn) (log-test-info "EXCEPTION: Test ~a raised an exception ~a" test-id exn))])
-                       (set! test-id (add1 test-id))
-                       ,#'expr)
-                    test-module-stx
-                    test-module-stx)]))
-
 (define (transform-test-suite program-stx)
   (syntax-parse program-stx
     [({~datum module+} {~datum test} {~and the-require ({~datum require} prgm ...)} ... body ...)
@@ -88,18 +44,12 @@
     [e
      (datum->syntax program-stx `,#'e program-stx program-stx)]))
 
-
-
 (define (mutate-rackunit-tests path)
   (define-values (dir file is-dir) (split-path path))
-  (define ns (make-base-namespace))
-  (namespace-attach-module (current-namespace) "my-logger.rkt" ns)
-  (define stx (extract-syntax path ns))
-  ;(display stx)
+  (define stx (extract-syntax path))
   (define test-suite-transformed-stx (transform-test-suite stx))
-  (display test-suite-transformed-stx)
   (log-test-info (pretty-format (syntax->datum test-suite-transformed-stx)))
-  (define fully-expanded-stx (expand-and-disarm test-suite-transformed-stx ns #:directory dir))
+  (define fully-expanded-stx (expand-and-disarm test-suite-transformed-stx #:directory dir))
   fully-expanded-stx)
 
 (define (make-mutant my-module-stx program-mutator i)
@@ -138,27 +88,17 @@
                      [current-directory dir])
         (namespace-attach-module this-ns 'rackunit)
         (namespace-attach-module this-ns 'racket)
-        #;(eval-syntax mutant)
         (with-handlers ([exn? (λ (e) (log-test-info "top level exception ~a\n" e))])
           (eval-syntax mutant))))
     ))
 
-; 1. syntax error at (define mutant ...) => wrap it with with-handlers 
-; 2. dynamic error if error at (eval-syntax mutant)
-; 3. just wrap every top level expressions with with-handlers, with the exception of define
-; 4. go to package server, select few packages with different authors (e.g. gregor date time library)
-
-;(run-experiment "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/board.rkt" if-swap*)
-
-#;(run-experiment "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/mytest.rkt" if-swap*)
-
-#;(run-experiment "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/experiments/santorini/player.rkt" swap*)
+#;(define (make-instrument-module test-module target-module-to-mutate mutate-index)
+  (λ (path-string _)
+    (cond
+      [(equal? path-string test-module) (mutate-rackunit-tests path-string)]
+      [(equal? path-string target-module-to-mutate) ])))
 
 (when (= (vector-length (current-command-line-arguments)) 1)
-    (run-experiment (vector-ref (current-command-line-arguments) 0)
-                    if-swap*))
-
-
-#;(mutate-rackunit-tests "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/mutate/test-my-rackunit.rkt")
-
-#;(mutate-rackunit-tests "/Users/wungjaelee/Everything/RESEARCH/Programming_Language_Research/gregor/gregor-lib/gregor/private/clock.rkt")
+  (let ([module-path (vector-ref (current-command-line-arguments) 0)])
+    (run-experiment (path->complete-path (string->path module-path))
+                    if-swap*)))
