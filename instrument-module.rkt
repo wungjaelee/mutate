@@ -3,7 +3,8 @@
 (require custom-load
          syntax/to-string
          (only-in syntax/modresolve [resolve-module-path module-path->path])
-         #;"../utilities/read-module.rkt")
+         #;"../utilities/read-module.rkt"
+         (rename-in "fully-expand.rkt" [extract-syntax read-module]))
 
 (module+ test
   (require ruinit))
@@ -38,8 +39,7 @@
     (define file-path (module-path->path module-path))
     (define-values (module-containing-directory ___1 ___2)
       (split-path file-path))
-    (define module-stx/instrumented (instrument-module path-string
-                                                       (read-module file-path)))
+    (define module-stx/instrumented (instrument-module path-string #'dummy))
     (instrumented-module path-string/simplified
                          module-path
                          file-path
@@ -92,6 +92,8 @@
            `(require ,(instrumented-module-module-path main/instrumented))))
         (make-result ns result))))
   run)
+
+
 ;; (listof path?) -> (listof path?)
 ;; Order the given set of modules such that every module in the list
 ;; only depends on modules earlier in the list than itself.

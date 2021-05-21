@@ -36,6 +36,21 @@
                 (log-test-info "Running test ~a" (cons 'check-name (map (λ (stx) (syntax->datum stx)) (syntax->list #'(args (... ...))))))
                 (original-rackunit-check args (... ...))))]))])
 
+(define-syntax-parser test-case
+  [(test-case name body ...+)
+   #'(@test-case name
+                 (with-handlers ([exn? (λ (e)
+                             (log-test-info "TEST-CASE-FAILURE with an error ~a" e)
+                             (log-test-info "TEST-CASE: ~a" (cons 'test-case (cons 'name (map (λ (stx) (syntax->datum stx)) (syntax->list #'(body ...)))))))])
+                   body ...))
+   #;#'(with-handlers ([exn? (λ (e)
+                             (log-test-info "TEST-CASE-FAILURE with an error ~a" e)
+                             (log-test-info "TEST-CASE: ~a" (cons 'test-case (cons 'name (map (λ (stx) (syntax->datum stx)) (syntax->list #'(body ...)))))))])
+       (@test-case name body ...))])
+
+(define-syntax-parser test-suite
+  [(test-suite name (~optional (~seq #:before maybe-before)) (~optional ))])
+
 (make-basic-check check-eq?)
 (make-basic-check check-not-eq?)
 (make-basic-check check-eqv?)
@@ -89,8 +104,9 @@
          check
          fail
          run-tests
+         test-case
          (rename-out [@test-suite test-suite]
-                     [@test-case test-case]))
+                     #;[@test-case test-case]))
 
 
 
